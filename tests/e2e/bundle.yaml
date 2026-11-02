@@ -1,0 +1,8 @@
+- id: editor
+  plugin: ../../../docleus-plugin-editor
+- id: commonmark
+  plugin: ../../../docleus-plugin-blocks-commonmark
+- id: change-requests
+  plugin: ../..
+- id: release-check
+  plugin: ./fixtures/release-check
