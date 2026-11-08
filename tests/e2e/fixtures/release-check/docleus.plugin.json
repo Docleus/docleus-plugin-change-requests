@@ -2,7 +2,7 @@
   "name": "@docleus/e2e-release-check",
   "version": "0.0.1",
   "engines": {
-    "docleus": ">=0.0.1 <0.0.7"
+    "docleus": ">=0.0.1 <0.0.8"
   },
   "entries": {
     "server": "./server.js"
