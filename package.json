@@ -1,6 +1,6 @@
 {
   "name": "@docleus/plugin-change-requests",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "type": "module",
   "description": "Change requests for Docleus spaces: branches for edits, reviews, merge and conflict resolution.",
@@ -31,7 +31,7 @@
     "e2e": "playwright test"
   },
   "peerDependencies": {
-    "@docleus/sdk": ">=0.0.1 <0.0.7",
+    "@docleus/sdk": ">=0.0.1 <0.0.8",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
