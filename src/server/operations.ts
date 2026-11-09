@@ -328,13 +328,13 @@ export function createOperations(
     };
   }
 
-  async function finish(
-    space: Space,
-    cr: StoredChangeRequest,
-    branch: Branch,
-  ): Promise<void> {
+  async function finish(space: Space, cr: StoredChangeRequest): Promise<void> {
+    const branch = await ctx.content.getBranch(space.id, cr.branch);
+    if (branch && cr.final && branch.head !== cr.final.head) {
+      throw invalidState(cr, "remove a branch changed after merging");
+    }
     try {
-      await ctx.content.deleteBranch(space.id, branch.name);
+      await ctx.content.deleteBranch(space.id, cr.branch);
     } catch (error) {
       if (
         !(error instanceof DocleusError) ||
@@ -344,6 +344,80 @@ export function createOperations(
       }
     }
     await store.setResolutions(space.id, cr.number, {});
+  }
+
+  async function mergedRevision(
+    space: Space,
+    cr: StoredChangeRequest,
+    branch: Branch,
+  ): Promise<Revision | undefined> {
+    let revision = await ctx.content.head(space.id, MAIN_BRANCH);
+    while (revision) {
+      if (revision.merged !== undefined) {
+        const merged = await ctx.content.getRevision(revision.merged);
+        if (merged?.spaceId === space.id && merged.branch === cr.branch) {
+          if (merged.id !== branch.head) {
+            throw new DocleusError(
+              "change-requests/invalid-state",
+              `change request #${cr.number} changed after its merge; retain the branch for recovery`,
+            );
+          }
+          return revision;
+        }
+      }
+      if (revision.id === branch.base) break;
+      revision = revision.parent
+        ? await ctx.content.getRevision(revision.parent)
+        : undefined;
+    }
+    return undefined;
+  }
+
+  async function mergeRecorded(revision: string): Promise<boolean> {
+    let afterSeq = 0;
+    for (;;) {
+      const entries = await ctx.content.readLog({ afterSeq, limit: 1000 });
+      for (const entry of entries) {
+        const payload = entry.payload;
+        if (
+          entry.type === CHANGE_REQUEST_MERGED &&
+          payload !== null &&
+          typeof payload === "object" &&
+          "revision" in payload &&
+          payload.revision === revision
+        )
+          return true;
+        afterSeq = entry.seq;
+      }
+      if (entries.length < 1000) return false;
+    }
+  }
+
+  async function completeMerge(
+    space: Space,
+    cr: StoredChangeRequest,
+    branch: Branch,
+    revision: Revision,
+    recovering: boolean,
+  ): Promise<Landed> {
+    if (!recovering || !(await mergeRecorded(revision.id))) {
+      const payload: ChangeRequestMerged = {
+        spaceId: space.id,
+        number: cr.number,
+        revision: revision.id,
+        branch: cr.branch,
+      };
+      await ctx.content.append(CHANGE_REQUEST_MERGED, payload);
+    }
+    const done = await store.update(space.id, cr.number, {
+      status: "merged",
+      mergedAt: revision.at,
+      mergedBy: revision.author,
+      mergedRevision: revision.id,
+      final: { base: branch.base, head: branch.head },
+    });
+    await finish(space, done);
+    return { changeRequest: present(done, branch.head), head: revision.id };
   }
 
   return {
@@ -482,7 +556,7 @@ export function createOperations(
           status: "closed",
           final: { base: branch.base, head: branch.head },
         });
-        await finish(space, cr, branch);
+        await finish(space, cr);
         return present(closed, branch.head);
       });
     },
@@ -579,6 +653,18 @@ export function createOperations(
     merge(space, caller, number) {
       return inSpace(space, async () => {
         const stored = await visible(space, caller, number);
+        if (stored.status === "merged" && stored.mergedRevision) {
+          await finish(space, stored);
+          return {
+            changeRequest: present(stored, stored.final?.head),
+            head: stored.mergedRevision,
+          };
+        }
+        if (isActive(stored)) {
+          const branch = await branchOf(space, stored);
+          const landed = await mergedRevision(space, stored, branch);
+          if (landed) return completeMerge(space, stored, branch, landed, true);
+        }
         const { workflow } = await workflows.get({
           kind: "space",
           orgId: space.orgId,
@@ -628,25 +714,7 @@ export function createOperations(
           author: caller.userId,
           merged,
         });
-        const payload: ChangeRequestMerged = {
-          spaceId: space.id,
-          number,
-          revision: revision.id,
-          branch: cr.branch,
-        };
-        await ctx.content.append(CHANGE_REQUEST_MERGED, payload);
-        const done = await store.update(space.id, number, {
-          status: "merged",
-          mergedAt: now(),
-          mergedBy: caller.userId,
-          mergedRevision: revision.id,
-          final: { base: planned.branch.base, head: planned.branch.head },
-        });
-        await finish(space, stored, planned.branch);
-        return {
-          changeRequest: present(done, planned.branch.head),
-          head: revision.id,
-        };
+        return completeMerge(space, stored, planned.branch, revision, false);
       });
     },
   };
