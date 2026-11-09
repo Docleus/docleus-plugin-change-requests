@@ -84,6 +84,13 @@ Writes to the change requests of a space run one at a time, so a double-clicked 
 - Dispatches `change-request/checks` (parallel, filtered by the space) when it shows or merges an open or draft change request. Listeners call `input.report(check)` with `{ name, title, status: "pending" | "success" | "failure", isRequired, summary?, url? }` for the branch head in `input.head`; `name` is namespaced (`acme.lint`). A merge needs every required check to succeed, and is checked again after `content/flush` moves the head. A listener that throws, an invalid or duplicate report, or more than 100 reports turn into one failed required check `change-requests.check-error`.
 - Appends `change-request/merged` `{ spaceId, number, revision, branch }` to the content log after each merge (`revision` is the merge revision on `main`).
 
+Retrying a partially completed merge reuses the original main revision, author
+and time, then finishes the event, status and branch cleanup without creating
+another main commit. A completed merge request is idempotent. If the branch
+changed after its merge landed, retry rejects with `change-requests/invalid-state`
+and retains the branch for recovery. Completion is serialized within a process;
+the content-log event check is not a cross-process transaction.
+
 ## Editor
 
 The editor entry starts a change request on the first edit of `main` (through `ctx.ui.registerEditBranch`), resumes the user's open draft on Edit (`registerEditDraft`), puts the draft's state and its Review and Merge actions in the space top bar (slot `space.bar`), shows the review panel with a block diff (slot `space.panel`), lists active change requests in the space sidebar, shows the list, a change request and its conflict resolution inside the space (slot `space.view`, `?view=change-requests.requests[&cr=<n>[&conflicts=1]]`, so the page tree stays in the sidebar), and adds the workflow settings page. The `/apps/change-requests/...` app remains only to redirect older links there.

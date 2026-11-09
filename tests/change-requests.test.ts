@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { testStorageDialect } from "@docleus/testing";
+import { sql } from "kysely";
 import {
   MAIN_BRANCH,
   type ChangeRequestChecksInput,
@@ -90,6 +92,10 @@ async function open(user: Client, title = "Change"): Promise<ChangeRequest> {
 
 function onBranch(path: string, branch: string): string {
   return `${f.space}${path}?branch=${encodeURIComponent(branch)}`;
+}
+
+async function executeSql(query: string): Promise<void> {
+  await sql.raw(query).execute(f.instance.ctx.storage.db);
 }
 
 async function rename(
@@ -362,6 +368,111 @@ describe("workflow settings", () => {
 });
 
 describe("merging", () => {
+  it
+    .skipIf(testStorageDialect() !== "sqlite")
+    .each([
+      "BEFORE INSERT ON content_log WHEN NEW.type = 'change-request/merged'",
+      "BEFORE UPDATE ON change_requests WHEN NEW.status = 'merged'",
+      "BEFORE DELETE ON branches WHEN OLD.name = 'cr/1'",
+      "BEFORE DELETE ON change_request_resolutions",
+    ])(
+    "resumes a partial merge without another main commit: %s",
+    async (failure) => {
+      await seed(["Intro"]);
+      const { branch, number } = await open(f.alice);
+      await f.alice.json("POST", onBranch("/pages", branch), {
+        title: "Guide",
+      });
+      await executeSql(
+        "INSERT INTO change_request_resolutions VALUES ('" +
+          f.spaceId +
+          "', 1, 'old', '{}')",
+      );
+      await executeSql(
+        `CREATE TRIGGER fail_merge ${failure} BEGIN SELECT RAISE(FAIL, 'injected merge completion failure'); END`,
+      );
+      expect((await f.alice.call("POST", cr(`/${number}/merge`))).status).toBe(
+        500,
+      );
+      const landed = await f.instance.ctx.content.head(f.spaceId);
+      expect(landed?.merged).toBeDefined();
+      await executeSql("DROP TRIGGER fail_merge");
+      if (failure.startsWith("BEFORE UPDATE")) {
+        for (let i = 0; i < 1001; i++) {
+          await f.instance.ctx.content.append("test/padding", {});
+        }
+      }
+      // Recovery must also find a landed merge after main moves forward.
+      await seed(["Later"]);
+      const current = await f.instance.ctx.content.head(f.spaceId);
+      const result = await f.owner.json<Landed>("POST", cr(`/${number}/merge`));
+      expect(result.head).toBe(landed?.id);
+      expect(result.changeRequest).toMatchObject({
+        status: "merged",
+        mergedBy: f.alice.userId,
+        mergedAt: landed?.at,
+        mergedRevision: landed?.id,
+      });
+      expect((await f.instance.ctx.content.head(f.spaceId))?.id).toBe(
+        current?.id,
+      );
+      expect(
+        await f.instance.ctx.content.getBranch(f.spaceId, branch),
+      ).toBeUndefined();
+      const events: unknown[] = [];
+      let afterSeq = 0;
+      for (;;) {
+        const log = await f.instance.ctx.content.readLog({
+          afterSeq,
+          limit: 1000,
+        });
+        events.push(
+          ...log.filter((entry) => entry.type === CHANGE_REQUEST_MERGED),
+        );
+        afterSeq = log.at(-1)?.seq ?? afterSeq;
+        if (log.length < 1000) break;
+      }
+      expect(events).toHaveLength(1);
+      expect(await titlesOn(MAIN_BRANCH)).toEqual(["Guide", "Intro", "Later"]);
+      const remaining =
+        await sql`SELECT * FROM change_request_resolutions`.execute(
+          f.instance.ctx.storage.db,
+        );
+      expect(remaining.rows).toEqual([]);
+    },
+  );
+
+  it.skipIf(testStorageDialect() !== "sqlite")(
+    "retains a branch changed after a partially recorded merge",
+    async () => {
+      const { branch, number } = await open(f.alice);
+      await f.alice.json("POST", onBranch("/pages", branch), {
+        title: "Guide",
+      });
+      await executeSql(
+        "CREATE TRIGGER fail_merge BEFORE INSERT ON content_log WHEN NEW.type = 'change-request/merged' BEGIN SELECT RAISE(FAIL, 'injected event failure'); END",
+      );
+      expect((await f.alice.call("POST", cr(`/${number}/merge`))).status).toBe(
+        500,
+      );
+      const landed = await f.instance.ctx.content.head(f.spaceId);
+      await executeSql("DROP TRIGGER fail_merge");
+      await f.alice.json("POST", onBranch("/pages", branch), {
+        title: "New draft",
+      });
+      expect(
+        await errorOf(await f.alice.call("POST", cr(`/${number}/merge`))),
+      ).toMatchObject({
+        status: 409,
+        body: { code: "change-requests/invalid-state" },
+      });
+      expect((await f.instance.ctx.content.head(f.spaceId))?.id).toBe(
+        landed?.id,
+      );
+      expect(await titlesOn(branch)).toEqual(["Guide", "New draft"]);
+    },
+  );
+
   it("merges a change request in one click", async () => {
     await seed(["Intro"]);
     const { branch, number } = await open(f.alice, "Add guide");
@@ -457,7 +568,7 @@ describe("merging", () => {
       f.alice.call("POST", cr(`/${number}/merge`)),
     ]);
     expect(responses.map((response) => response.status).toSorted()).toEqual([
-      200, 403,
+      200, 200,
     ]);
     const log = await f.instance.ctx.content.readLog();
     expect(
