@@ -523,14 +523,15 @@ describe("merging", () => {
   });
 
   it("flushes unsaved edits of the branch before merging, rebasing and listing conflicts", async () => {
-    const flushed: string[] = [];
+    const flushed: { branch: string; requireCommit: boolean | undefined }[] =
+      [];
     let pending: string | undefined;
     const fiber = await f.instance.ctx.plugin({
       name: "pending-edits",
       inject: ["content"],
       apply(ctx: Context) {
-        ctx.on("content/flush", async ({ spaceId, branch }) => {
-          flushed.push(branch);
+        ctx.on("content/flush", async ({ spaceId, branch, requireCommit }) => {
+          flushed.push({ branch, requireCommit });
           if (pending === undefined) return;
           const title = pending;
           pending = undefined;
@@ -556,7 +557,9 @@ describe("merging", () => {
     pending = "Merged";
     await f.alice.json("POST", cr(`/${number}/merge`));
     expect(await titlesOn(MAIN_BRANCH)).toEqual(["Intro", "Merged", "Rebased"]);
-    expect(flushed).toEqual([branch, branch, branch]);
+    expect(flushed).toEqual(
+      Array.from({ length: 3 }, () => ({ branch, requireCommit: true })),
+    );
     await fiber.dispose();
   });
 
