@@ -98,6 +98,28 @@ async function executeSql(query: string): Promise<void> {
   await sql.raw(query).execute(f.instance.ctx.storage.db);
 }
 
+async function blockCloseCleanup(
+  branch: string,
+  number: number,
+  step: "branch" | "resolutions",
+) {
+  if (step === "branch") {
+    await executeSql(
+      "CREATE TABLE close_guard (space_id text, branch text, FOREIGN KEY (space_id, branch) REFERENCES branches(space_id, name))",
+    );
+    await executeSql(
+      `INSERT INTO close_guard VALUES ('${f.spaceId}', '${branch}')`,
+    );
+  } else {
+    await executeSql(
+      "CREATE TABLE close_guard (space_id text, number integer, conflict_id text, FOREIGN KEY (space_id, number, conflict_id) REFERENCES change_request_resolutions(space_id, number, conflict_id))",
+    );
+    await executeSql(
+      `INSERT INTO close_guard VALUES ('${f.spaceId}', ${number}, 'old')`,
+    );
+  }
+}
+
 async function rename(
   user: Client,
   branch: string,
@@ -987,6 +1009,63 @@ describe("rebasing and conflicts", () => {
 });
 
 describe("closing", () => {
+  it.each(["branch", "resolutions"] as const)(
+    "resumes interrupted close cleanup: %s",
+    async (failure) => {
+      const { branch, number } = await open(f.alice);
+      await f.alice.json("POST", onBranch("/pages", branch), {
+        title: "Guide",
+      });
+      await executeSql(
+        `INSERT INTO change_request_resolutions VALUES ('${f.spaceId}', ${number}, 'old', '{}')`,
+      );
+      await blockCloseCleanup(branch, number, failure);
+      expect((await f.alice.call("POST", cr(`/${number}/close`))).status).toBe(
+        500,
+      );
+      await executeSql("DROP TABLE close_guard");
+      expect((await f.alice.call("POST", cr(`/${number}/close`))).status).toBe(
+        200,
+      );
+      expect(
+        await f.instance.ctx.content.getBranch(f.spaceId, branch),
+      ).toBeUndefined();
+      const rows = await sql`SELECT * FROM change_request_resolutions`.execute(
+        f.instance.ctx.storage.db,
+      );
+      expect(rows.rows).toEqual([]);
+      expect((await f.alice.call("POST", cr(`/${number}/close`))).status).toBe(
+        409,
+      );
+    },
+  );
+
+  it("preserves branch edits after an interrupted close", async () => {
+    const { branch, number } = await open(f.alice);
+    await f.alice.json("POST", onBranch("/pages", branch), {
+      title: "Before",
+    });
+    await blockCloseCleanup(branch, number, "branch");
+    expect((await f.alice.call("POST", cr(`/${number}/close`))).status).toBe(
+      500,
+    );
+    await executeSql("DROP TABLE close_guard");
+    const { content } = f.instance.ctx;
+    const head = await content.head(f.spaceId, branch);
+    await content.commit({
+      spaceId: f.spaceId,
+      branch,
+      parent: head?.id,
+      put: { later: page("Later") },
+      message: "Later branch edit",
+    });
+    const later = await content.head(f.spaceId, branch);
+    expect((await f.alice.call("POST", cr(`/${number}/close`))).status).toBe(
+      409,
+    );
+    expect((await content.getBranch(f.spaceId, branch))?.head).toBe(later?.id);
+  });
+
   it("closes a change request and deletes its branch", async () => {
     const { branch, number } = await open(f.alice);
     await f.alice.json("POST", onBranch("/pages", branch), { title: "Guide" });
