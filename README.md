@@ -137,3 +137,5 @@ Version `0.0.10` supports Docleus core and SDK `0.0.1`, `0.0.2`, `0.0.3`, `0.0.4
 the matching `>=0.0.1 <0.0.10` manifest and SDK peer ranges.
 
 Merge, rebase and conflict previews request a strict `content/flush` and fail if a collaboration provider cannot commit its pending edits. Retained drafts can be saved and the operation retried.
+
+A close request interrupted during cleanup can be retried to remove its remaining branch or resolution rows. Cleanup compares the recorded branch head atomically and preserves edits made after closing. Once cleanup is complete, another close keeps the existing 409 response.

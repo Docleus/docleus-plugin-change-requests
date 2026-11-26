@@ -330,19 +330,24 @@ export function createOperations(
   }
 
   async function finish(space: Space, cr: StoredChangeRequest): Promise<void> {
-    const branch = await ctx.content.getBranch(space.id, cr.branch);
-    if (branch && cr.final && branch.head !== cr.final.head) {
-      throw invalidState(cr, "remove a branch changed after merging");
-    }
     try {
-      await ctx.content.deleteBranch(space.id, cr.branch);
+      await ctx.content.deleteBranch(
+        space.id,
+        cr.branch,
+        cr.final && { expectedHead: cr.final.head },
+      );
     } catch (error) {
+      if (
+        error instanceof DocleusError &&
+        error.code === "content/stale-head"
+      ) {
+        throw invalidState(cr, "remove a branch changed after completion");
+      }
       if (
         !(error instanceof DocleusError) ||
         error.code !== "content/branch-not-found"
-      ) {
+      )
         throw error;
-      }
     }
     await store.setResolutions(space.id, cr.number, {});
   }
@@ -551,13 +556,20 @@ export function createOperations(
       return inSpace(space, async () => {
         const cr = await visible(space, caller, number);
         assertCanEdit(caller, cr);
+        if (cr.status === "closed") {
+          const branch = await ctx.content.getBranch(space.id, cr.branch);
+          if (!branch && !(await store.hasResolutions(space.id, number)))
+            throw invalidState(cr, "close");
+          await finish(space, cr);
+          return present(cr, cr.final?.head);
+        }
         if (!isActive(cr)) throw invalidState(cr, "close");
         const branch = await branchOf(space, cr);
         const closed = await store.update(space.id, number, {
           status: "closed",
           final: { base: branch.base, head: branch.head },
         });
-        await finish(space, cr);
+        await finish(space, closed);
         return present(closed, branch.head);
       });
     },

@@ -77,6 +77,8 @@ export interface ChangeRequestStore {
     spaceId: string,
     number: number,
   ): Promise<Record<string, MergeResolution>>;
+  /** Whether cleanup still has stored rows, including malformed resolutions. */
+  hasResolutions(spaceId: string, number: number): Promise<boolean>;
   setResolutions(
     spaceId: string,
     number: number,
@@ -340,6 +342,17 @@ export function createChangeRequestStore(
         }
       }
       return out;
+    },
+
+    async hasResolutions(spaceId, number) {
+      await ready;
+      const row = await db
+        .selectFrom("change_request_resolutions")
+        .select("conflict_id")
+        .where("space_id", "=", spaceId)
+        .where("number", "=", number)
+        .executeTakeFirst();
+      return row !== undefined;
     },
 
     async setResolutions(spaceId, number, resolutions) {
