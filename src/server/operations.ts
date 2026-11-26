@@ -268,6 +268,7 @@ export function createOperations(
     await ctx.parallel(scope, "content/flush", {
       spaceId: space.id,
       branch: cr.branch,
+      requireCommit: true,
     });
   }
 
