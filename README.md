@@ -133,6 +133,6 @@ before 1.0.
 
 ## Compatibility
 
-Version `0.0.12` supports core and SDK `0.0.10` through `0.0.11` with matching `>=0.0.10 <0.0.12` manifest and SDK peer ranges. Install the complete distribution `0.0.13` for the repaired editing and export behavior.
+Version `0.0.12` supports core and SDK `0.0.11` with matching `>=0.0.11 <0.0.12` manifest and SDK peer ranges. It requires the host to retain edit mode and drafts after save failures. Install it with distribution `0.0.13`.
 
 A close request interrupted during cleanup can be retried to remove its remaining branch or resolution rows. Cleanup compares the recorded branch head atomically and preserves edits made after closing. Once cleanup is complete, another close keeps the existing 409 response.
