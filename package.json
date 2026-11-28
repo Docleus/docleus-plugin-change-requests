@@ -31,7 +31,7 @@
     "e2e": "playwright test"
   },
   "peerDependencies": {
-    "@docleus/sdk": ">=0.0.10 <0.0.12",
+    "@docleus/sdk": ">=0.0.11 <0.0.12",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
