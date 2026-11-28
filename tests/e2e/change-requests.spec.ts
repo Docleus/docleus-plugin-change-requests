@@ -84,6 +84,45 @@ test("one click merges a change request into main", async ({ page }) => {
   await expect(sidebar(page)).toContainText("No open change requests.");
 });
 
+test("Done retains a failed body save until a successful retry", async ({
+  page,
+}) => {
+  const space = await openNewSpace(page);
+  await newPage(page);
+  const pageId = pageIdOf(page);
+  const branch = shownBranch(page);
+  const closeRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/close")) closeRequests.push(request.url());
+  });
+  await page.route("**/pages/*/body*", (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({
+        code: "test/write-failed",
+        message: "Temporary write failure",
+      }),
+    }),
+  );
+  await editorBody(page).click();
+  await page.keyboard.type("Retain this unsaved paragraph");
+  await bar(page).getByRole("button", { name: "Done" }).click();
+  await expect(bar(page).locator(".save-state")).toHaveText("Save failed");
+  await expect(bar(page).getByRole("button", { name: "Done" })).toBeVisible();
+  expect(shownBranch(page)).toBe(branch);
+  await expect(editorBody(page)).toContainText("Retain this unsaved paragraph");
+  expect(closeRequests).toEqual([]);
+  await page.unroute("**/pages/*/body*");
+  await save(page);
+  expect(await storedText(page, space, pageId, branch)).toBe(
+    "Retain this unsaved paragraph",
+  );
+  await done(page);
+  await startEditing(page);
+  await expect(editorBody(page)).toContainText("Retain this unsaved paragraph");
+});
+
 test("a draft without changes goes away on Done", async ({ page }) => {
   const space = await openNewSpace(page);
   await newPage(page);
